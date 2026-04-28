@@ -91,7 +91,7 @@ public:
     /** Set a timer for the simulation
      * @param t Period (time between events) in milliseconds.
     */
-    void SetTimer(SystemEventType type, float t);
+    void SetTimer(SystemEventType type, float period, float initial_time = 0.0f);
     void SetSystemEvent(SystemEventType type, float t);
 
     void SaveVTK(const std::string & filename) const;
@@ -225,6 +225,7 @@ void BasicTissue<APM,CVM>::Init(const vector<CellType> & cell_types_, vector<Nod
         }
         else if(this->tissue_fiber_orientation == FiberOrientation::HETEROGENEOUS)
         {
+            // @todo If fiber_orientation is locally 0, it is not set to isotropic. Check if it can be done in ChangeParameters()
             tissue_nodes[i].orientation = fiber_orientation_.at(i);
         }
 
@@ -263,6 +264,7 @@ void BasicTissue<APM,CVM>::ChangeParameters(vector<NodeParameters> & parameters_
     assert(parameters_.size() == n_nodes || parameters_.size() == 1);
 
     // Set isotropic diffusion, default is true
+    // @todo if heterogeneous and locally isotropic, it is not set in parameters.
     bool isotropic = true;
     if(this->tissue_fiber_orientation == FiberOrientation::HOMOGENEOUS || this->tissue_fiber_orientation == FiberOrientation::HETEROGENEOUS)
         isotropic = false;
@@ -493,18 +495,19 @@ vector<float> BasicTissue<APM,CVM>::GetAPDVariation() const
 }
 
 /**
- * Set a timer for the simulation.
- * @param t Period (time between events) in milliseconds.
-*/
+ * Set a timer for the simulation. There can be one timer for each type of system event.
+ * @param period Period (time between events) in milliseconds.
+ * @param initial_time Initial time for the timer in milliseconds.
+ */
 template <typename APM,typename CVM>
-void BasicTissue<APM,CVM>::SetTimer(SystemEventType type, float t)
+void BasicTissue<APM,CVM>::SetTimer(SystemEventType type, float period, float initial_time)
 {
     // Setting timer before the simulation starts
     if(this->tissue_time == 0)
     {
-        this->timer.at(int(type)) = t;
+        this->timer.at(int(type)) = period;
         // Insert the first system event
-        event_queue.InsertSystemEvent(t, type);
+        event_queue.InsertSystemEvent(initial_time, type);
         return;
     }
 
@@ -512,7 +515,7 @@ void BasicTissue<APM,CVM>::SetTimer(SystemEventType type, float t)
     // If the timer is already set, update it
     if(this->timer.at(int(type)) > 0)
     {
-        this->timer.at(int(type)) = t;
+        this->timer.at(int(type)) = period;
     }
     else
     {
