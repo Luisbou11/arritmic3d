@@ -1,5 +1,6 @@
 import arritmic3d
 import numpy as np
+import os
 
 from sensor_util import ShowAllSensorData, WriteAllSensorData
 
@@ -26,10 +27,12 @@ def main():
     beat = 0
     CL = 300.0  # cycle length in ms
     tissue.SetSystemEvent(arritmic3d.SystemEventType.EXT_ACTIVATION, 1)
-    #tissue.SaveVTK("output/test0.vtk")
+    tissue.SaveVTK("output/test0.vtk")
+    #tissue.SetTimer(arritmic3d.SystemEventType.FILE_WRITE, 10)
 
     print("-- Begin Simulation --", flush=True)
 
+    j = 10
     for i in range(1, 1000):
         tick = tissue.update()
         #print(i, tissue.GetTime())
@@ -44,7 +47,8 @@ def main():
             tissue.SetSystemEvent(arritmic3d.SystemEventType.EXT_ACTIVATION, tissue.GetTime() + CL)
 
         if tick == arritmic3d.SystemEventType.FILE_WRITE:
-            tissue.SaveVTK(f"output/test{i}.vtk")
+            tissue.SaveVTK(f"output/test{j}.vtk")
+            j += 10
 
     sensors = tissue.GetSensorInfo()
     sensor_names = tissue.GetSensorDataNames()
