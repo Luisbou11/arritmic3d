@@ -1,7 +1,7 @@
 """
 ensight_exporter.py
 ===================
-Módulo de exportación Arritmic3D -> EnSight Gold (ASCII).
+Módulo de exportación Arritmic3D -> EnSight Gold (ASCII o C Binary).
 
 Genera el fichero de geometría (.geo), los ficheros de variables escalares
 (.scl) y el descriptor (.case) usando el formato 'block rectilinear', que es
@@ -12,7 +12,7 @@ Uso
 ---
     from ensight_exporter import EnsightGoldWriter
 
-    # Con espaciado explícito
+    # Con espaciado explícito (binario por defecto)
     writer = EnsightGoldWriter(
         case_dir  = "/ruta/salida",
         base_name = "cardiac",
@@ -21,6 +21,7 @@ Uso
         x_coords  = [...],
         y_coords  = [...],
         z_coords  = [...],
+        binary    = True,   # False para ASCII
     )
 
     # Con grid pyvista
@@ -30,6 +31,7 @@ Uso
         tissue    = tissue,
         variables = ["State", "APD", "LAT"],
         grid      = grid,
+        binary    = True,
     )
 
     # En el bucle de simulación
@@ -74,15 +76,22 @@ _VARIABLE_MAP: dict[str, str] = {
 }
 
 _ENSIGHT_MAX_DESC = 79
+_ENSIGHT_STR_LEN  = 80
 
 
 def _truncate(text: str, max_len: int = _ENSIGHT_MAX_DESC) -> str:
     return text[:max_len]
 
 
+def _str80(text: str) -> bytes:
+    """Codifica text como campo de exactamente 80 bytes relleno con espacios."""
+    encoded = text.encode("ascii", errors="replace")
+    return encoded[:_ENSIGHT_STR_LEN].ljust(_ENSIGHT_STR_LEN)
+
+
 class EnsightGoldWriter:
     """
-    Exportador Arritmic3D -> EnSight Gold ASCII.
+    Exportador Arritmic3D -> EnSight Gold ASCII o C Binary.
     Genera .case, .geo (block rectilinear) y .scl (escalares por timestep).
     """
 
@@ -99,9 +108,11 @@ class EnsightGoldWriter:
         x_coords: list[float] | None = None,
         y_coords: list[float] | None = None,
         z_coords: list[float] | None = None,
+        binary: bool = True,
     ) -> None:
         self.case_dir   = os.path.abspath(case_dir)
         self.base_name  = base_name
+        self.binary     = binary
         self.variables  = list(variables) if variables is not None else []
         self._static_data: dict[str, np.ndarray] = static_data or {}
         self._timestep_index  = 0
@@ -121,8 +132,9 @@ class EnsightGoldWriter:
             self._write_static_variable(var_name, data)
         self._write_case_file()
 
+        mode = "binario" if binary else "ASCII"
         print(
-            f"[EnsightGoldWriter] Inicializado en '{self.case_dir}'.",
+            f"[EnsightGoldWriter] Inicializado en '{self.case_dir}' (modo {mode}).",
             flush=True,
         )
 
@@ -139,6 +151,7 @@ class EnsightGoldWriter:
         variables: Sequence[str] | None = None,
         static_grid_vars: Sequence[str] | None = None,
         static_data: dict[str, np.ndarray] | None = None,
+        binary: bool = True,
     ) -> "EnsightGoldWriter":
         """
         Crea un EnsightGoldWriter extrayendo las coordenadas reales del grid pyvista.
@@ -169,6 +182,7 @@ class EnsightGoldWriter:
             x_coords    = x_coords,
             y_coords    = y_coords,
             z_coords    = z_coords,
+            binary      = binary,
         )
 
     # ------------------------------------------------------------------
@@ -189,9 +203,16 @@ class EnsightGoldWriter:
         self._write_case_file()
 
     # ------------------------------------------------------------------
-    # Geometría (.geo)
+    # Geometría (.geo) — despachador
     # ------------------------------------------------------------------
     def _write_geometry(self, tissue) -> None:
+        if self.binary:
+            self._write_geometry_binary(tissue)
+        else:
+            self._write_geometry_ascii(tissue)
+
+    # Geometría ASCII
+    def _write_geometry_ascii(self, tissue) -> None:
         """
         Escribe <base_name>.geo en formato EnSight Gold ASCII.
 
@@ -208,34 +229,62 @@ class EnsightGoldWriter:
         geo_path = os.path.join(self.case_dir, f"{self.base_name}.geo")
 
         with open(geo_path, "w") as f:
-            # Cabeceras obligatorias
             f.write(_truncate("EnSight Gold Geometry File") + "\n")
             f.write(_truncate("Arritmic3D cardiac tissue export") + "\n")
             f.write("node id off\n")
             f.write("element id off\n")
 
-            # Parte (ID base-1 obligatorio)
             f.write("part\n")
             f.write(f"{1:10d}\n")
             f.write(_truncate("CardiacTissue") + "\n")
 
-            # block rectilinear: solo coordenadas únicas por eje
             f.write("block rectilinear\n")
-
-            # Dimensiones ni nj nk en una sola línea
             f.write(f"{nx:10d}{ny:10d}{nz:10d}\n")
 
-            # Coordenadas X (ni valores), Y (nj valores), Z (nk valores)
             self._write_float_block_np(f, np.asarray(self._x_coords))
             self._write_float_block_np(f, np.asarray(self._y_coords))
             self._write_float_block_np(f, np.asarray(self._z_coords))
 
-        print(f"[EnsightGoldWriter] Geometría escrita: '{geo_path}'", flush=True)
+        print(f"[EnsightGoldWriter] Geometría escrita (ASCII): '{geo_path}'", flush=True)
+
+    # Geometría binaria
+    def _write_geometry_binary(self, tissue) -> None:
+        """
+        Escribe <base_name>.geo en formato EnSight Gold C Binary.
+
+        Strings: 80 bytes fijos (relleno con espacios).
+        Enteros: int32.  Flotantes: float32.
+        """
+        nx = tissue.GetSizeX()
+        ny = tissue.GetSizeY()
+        nz = tissue.GetSizeZ()
+
+        geo_path = os.path.join(self.case_dir, f"{self.base_name}.geo")
+
+        with open(geo_path, "wb") as f:
+            f.write(_str80("C Binary"))
+            f.write(_str80("EnSight Gold Geometry File"))
+            f.write(_str80("Arritmic3D cardiac tissue export"))
+            f.write(_str80("node id off"))
+            f.write(_str80("element id off"))
+
+            f.write(_str80("part"))
+            f.write(np.int32(1).tobytes())
+            f.write(_str80("CardiacTissue"))
+
+            f.write(_str80("block rectilinear"))
+            f.write(np.array([nx, ny, nz], dtype=np.int32).tobytes())
+
+            f.write(np.asarray(self._x_coords, dtype=np.float32).tobytes())
+            f.write(np.asarray(self._y_coords, dtype=np.float32).tobytes())
+            f.write(np.asarray(self._z_coords, dtype=np.float32).tobytes())
+
+        print(f"[EnsightGoldWriter] Geometría escrita (binario): '{geo_path}'", flush=True)
 
     @staticmethod
     def _write_float_block_np(f, arr: np.ndarray) -> None:
         """
-        Escribe un numpy array en formato EnSight: %12.5e, 1 valor por línea.
+        Escribe un numpy array en formato EnSight ASCII: %12.5e, 1 valor por línea.
 
         BUG CORREGIDO: la versión anterior escribía 6 valores por línea
         (np.savetxt con reshape(-1, 6)). La especificación EnSight Gold exige
@@ -250,9 +299,22 @@ class EnsightGoldWriter:
         f.write(buf.getvalue())
 
     # ------------------------------------------------------------------
-    # Variables escalares (.scl)
+    # Variables escalares (.scl) — despachadores
     # ------------------------------------------------------------------
     def _write_static_variable(self, var_name: str, data: np.ndarray) -> None:
+        if self.binary:
+            self._write_static_variable_binary(var_name, data)
+        else:
+            self._write_static_variable_ascii(var_name, data)
+
+    def _write_variable(self, var_name: str, data, timestep_idx: int) -> None:
+        if self.binary:
+            self._write_variable_binary(var_name, data, timestep_idx)
+        else:
+            self._write_variable_ascii(var_name, data, timestep_idx)
+
+    # Variables estáticas ASCII
+    def _write_static_variable_ascii(self, var_name: str, data: np.ndarray) -> None:
         """
         Escribe una variable estática (sin timestep): <base_name>_<var_name>.scl.
         Se referencia en el .case sin time set, por lo que EnSight/ParaView la
@@ -268,9 +330,26 @@ class EnsightGoldWriter:
             buf = io.StringIO()
             np.savetxt(buf, np.asarray(data, dtype=float), fmt="%12.5e")
             f.write(buf.getvalue())
-        print(f"[EnsightGoldWriter] Variable estatica escrita: '{filepath}'", flush=True)
+        print(f"[EnsightGoldWriter] Variable estatica escrita (ASCII): '{filepath}'", flush=True)
 
-    def _write_variable(self, var_name: str, data, timestep_idx: int) -> None:
+    # Variables estáticas binarias
+    def _write_static_variable_binary(self, var_name: str, data: np.ndarray) -> None:
+        """
+        Escribe una variable estática en formato C Binary.
+        Strings 80 bytes, valores float32.
+        """
+        filename = f"{self.base_name}_{var_name}.scl"
+        filepath = os.path.join(self.case_dir, filename)
+        with open(filepath, "wb") as f:
+            f.write(_str80(f"Arritmic3D {var_name} (static)"))
+            f.write(_str80("part"))
+            f.write(np.int32(1).tobytes())
+            f.write(_str80("block"))
+            f.write(np.asarray(data, dtype=np.float32).tobytes())
+        print(f"[EnsightGoldWriter] Variable estatica escrita (binario): '{filepath}'", flush=True)
+
+    # Variables temporales ASCII
+    def _write_variable_ascii(self, var_name: str, data, timestep_idx: int) -> None:
         """
         Escribe un fichero escalar .scl para var_name en el timestep dado.
 
@@ -288,8 +367,23 @@ class EnsightGoldWriter:
             np.savetxt(buf, np.asarray(data, dtype=float), fmt="%12.5e")
             f.write(buf.getvalue())
 
+    # Variables temporales binarias
+    def _write_variable_binary(self, var_name: str, data, timestep_idx: int) -> None:
+        """
+        Escribe un fichero escalar .scl en C Binary para el timestep dado.
+        Strings 80 bytes, valores float32.
+        """
+        filename = f"{self.base_name}_{var_name}_{timestep_idx:05d}.scl"
+        filepath = os.path.join(self.case_dir, filename)
+        with open(filepath, "wb") as f:
+            f.write(_str80(f"Arritmic3D {var_name}"))
+            f.write(_str80("part"))
+            f.write(np.int32(1).tobytes())
+            f.write(_str80("block"))
+            f.write(np.asarray(data, dtype=np.float32).tobytes())
+
     # ------------------------------------------------------------------
-    # Fichero .case
+    # Fichero .case (siempre ASCII)
     # ------------------------------------------------------------------
     def _write_case_file(self) -> None:
         """Escribe el fichero .case con FORMAT, GEOMETRY, VARIABLE y TIME."""
