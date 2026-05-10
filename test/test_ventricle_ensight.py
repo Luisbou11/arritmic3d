@@ -2,7 +2,8 @@ import arritmic3d
 import numpy as np
 import pyvista as pv
 
-from ensight_exporter import EnsightGoldWriter
+from ensight_exporter_rectilinear import EnsightGoldWriter
+
 
 
 # Conversion of CellType and TissueRegion from the VTK file to Ten Tusscher model id.
@@ -63,13 +64,14 @@ def main():
     # TissueType: tipología usada por el modelo (0=core, 1-3=sano endo/mid/epi,
     #             4-6=BZ endo/mid/epi) — combina Cell_type + EndoToEpi
     writer = EnsightGoldWriter.from_pyvista_grid(
-        case_dir         = "output",
-        base_name        = "ventricle",
+        case_dir         = "output/ensight",
+        base_name        = "ventricle_unstructured",
         tissue           = tissue,
         grid             = grid,
         static_grid_vars = ["Cell_type"],
         static_data      = {"TissueType": np.array(v_type, dtype=float)},
         variables        = ["State", "APD", "CV"],
+        binary           = True,
     )
 
     # Set the timer for saving timesteps
@@ -79,15 +81,19 @@ def main():
     initial_node = 12051
     beat = 0
     tissue.SetSystemEvent(arritmic3d.SystemEventType.EXT_ACTIVATION, 0)
+    tissue.SetSystemEvent(arritmic3d.SystemEventType.EXT_ACTIVATION, 700)
 
     i = 1
-    while tissue.GetTime() < 175.0:
+    while tissue.GetTime() < 1000.0:
         tick = tissue.update(0)
 
         if tick == arritmic3d.SystemEventType.EXT_ACTIVATION:
             beat += 1
+            print("Mean APD variation: ", tissue.GetAPDMeanVariation())
+            tissue.ResetVariations()
+
             tissue.ExternalActivation([initial_node], tissue.GetTime(), beat)
-            print(f"Beat {beat} at t={tissue.GetTime():.1f} ms", flush=True)
+            print("Beat at time:", tissue.GetTime())
 
         elif tick == arritmic3d.SystemEventType.FILE_WRITE:
             writer.write_timestep(tissue, tissue.GetTime())

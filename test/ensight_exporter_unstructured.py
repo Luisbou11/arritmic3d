@@ -18,7 +18,7 @@ Uso
         static_grid_vars = ["Cell_type"],
         static_data      = {"TissueType": np.array(v_type, dtype=float)},
         variables        = ["State", "APD", "CV"],
-        binary           = False,
+        binary           = True,   # False para ASCII
     )
 
     writer.write_timestep(tissue, time_ms=20.0)
@@ -310,11 +310,42 @@ class EnsightGoldWriter:
     # ------------------------------------------------------------------
     def _write_geometry(self, tissue) -> None:
         if self.binary:
-            raise NotImplementedError(
-                "[EnsightGoldWriter-Unstructured] Escritura binaria no "
-                "implementada. Usa binary=False."
-            )
-        self._write_geometry_ascii(tissue)
+            self._write_geometry_binary(tissue)
+        else:
+            self._write_geometry_ascii(tissue)
+
+    def _write_geometry_binary(self, tissue) -> None:
+        n_nodes = len(self._node_x)
+        n_hex   = len(self._hex_connectivity)
+
+        geo_path = os.path.join(self.case_dir, f"{self.base_name}.geo")
+
+        with open(geo_path, "wb") as f:
+            f.write(_str80("C Binary"))
+            f.write(_str80("EnSight Gold Geometry File"))
+            f.write(_str80("Arritmic3D cardiac tissue export (unstructured)"))
+            f.write(_str80("node id off"))
+            f.write(_str80("element id off"))
+
+            f.write(_str80("part"))
+            f.write(np.int32(1).tobytes())
+            f.write(_str80("CardiacTissue"))
+
+            f.write(_str80("coordinates"))
+            f.write(np.int32(n_nodes).tobytes())
+
+            f.write(np.asarray(self._node_x, dtype=np.float32).tobytes())
+            f.write(np.asarray(self._node_y, dtype=np.float32).tobytes())
+            f.write(np.asarray(self._node_z, dtype=np.float32).tobytes())
+
+            f.write(_str80("hexa8"))
+            f.write(np.int32(n_hex).tobytes())
+            f.write(self._hex_connectivity.astype(np.int32).tobytes())
+
+        print(
+            f"[EnsightGoldWriter-Unstructured] Geometría escrita (binario): '{geo_path}'",
+            flush=True,
+        )
 
     def _write_geometry_ascii(self, tissue) -> None:
         n_nodes = len(self._node_x)
@@ -359,16 +390,29 @@ class EnsightGoldWriter:
         f.write(buf.getvalue())
 
     # ------------------------------------------------------------------
-    # Variables estáticas (.scl sin timestep) — despachador + ASCII
+    # Variables estáticas (.scl sin timestep) — despachador + implementaciones
     # ------------------------------------------------------------------
     def _write_static_variable(self, var_name: str, data: np.ndarray) -> None:
         """Filtra data con _node_mask y escribe la variable estática."""
         data_filtered = np.asarray(data, dtype=float)[self._node_mask]
         if self.binary:
-            raise NotImplementedError(
-                "[EnsightGoldWriter-Unstructured] Escritura binaria no implementada."
-            )
-        self._write_static_variable_ascii(var_name, data_filtered)
+            self._write_static_variable_binary(var_name, data_filtered)
+        else:
+            self._write_static_variable_ascii(var_name, data_filtered)
+
+    def _write_static_variable_binary(self, var_name: str, data: np.ndarray) -> None:
+        filename = f"{self.base_name}_{var_name}.scl"
+        filepath = os.path.join(self.case_dir, filename)
+        with open(filepath, "wb") as f:
+            f.write(_str80(f"Arritmic3D {var_name} (static)"))
+            f.write(_str80("part"))
+            f.write(np.int32(1).tobytes())
+            f.write(_str80("coordinates"))
+            f.write(np.asarray(data, dtype=np.float32).tobytes())
+        print(
+            f"[EnsightGoldWriter-Unstructured] Variable estática escrita (binario): '{filepath}'",
+            flush=True,
+        )
 
     def _write_static_variable_ascii(self, var_name: str, data: np.ndarray) -> None:
         """
@@ -391,15 +435,24 @@ class EnsightGoldWriter:
         )
 
     # ------------------------------------------------------------------
-    # Variables temporales (.scl por timestep) — despachador + ASCII
+    # Variables temporales (.scl por timestep) — despachador + implementaciones
     # ------------------------------------------------------------------
     def _write_variable(self, var_name: str, data, timestep_idx: int) -> None:
         """data ya viene filtrado (longitud n_nodes)."""
         if self.binary:
-            raise NotImplementedError(
-                "[EnsightGoldWriter-Unstructured] Escritura binaria no implementada."
-            )
-        self._write_variable_ascii(var_name, data, timestep_idx)
+            self._write_variable_binary(var_name, data, timestep_idx)
+        else:
+            self._write_variable_ascii(var_name, data, timestep_idx)
+
+    def _write_variable_binary(self, var_name: str, data, timestep_idx: int) -> None:
+        filename = f"{self.base_name}_{var_name}.{timestep_idx:05d}.scl"
+        filepath = os.path.join(self.case_dir, filename)
+        with open(filepath, "wb") as f:
+            f.write(_str80(f"Arritmic3D {var_name}"))
+            f.write(_str80("part"))
+            f.write(np.int32(1).tobytes())
+            f.write(_str80("coordinates"))
+            f.write(np.asarray(data, dtype=np.float32).tobytes())
 
     def _write_variable_ascii(self, var_name: str, data, timestep_idx: int) -> None:
         """
